@@ -2,9 +2,33 @@ from __future__ import division
 from __future__ import print_function
 
 import numpy as np
+from .utils import get_node_data
+import networkx as nx
 
 np.random.seed(123)
 
+
+
+
+
+def get_edge_data(G, nodeid, neighbor, attr_name):
+    if isinstance(G, (nx.MultiGraph, nx.Graph, nx.DiGraph, nx.MultiDiGraph)):
+        return G[nodeid][neighbor][attr_name]
+    else:
+        # this is for dgl graph
+        return G.edata[attr_name][G.edge_id(nodeid, neighbor)]
+
+def is_node_in(G, nodeid):
+    if isinstance(G, (nx.MultiGraph, nx.Graph, nx.DiGraph, nx.MultiDiGraph)):
+        return nodeid in G.node
+    else:
+        # this is for dgl graph
+        return nodeid in G.nodes()
+    
+# NB: KWU: add support to dgl graph G
+# NB: KWU: the following functions need to be generalized G.node[n]['val'], G[nodeid][neighbor]['trained_removed']
+# TODO: KWU: and we need to use methodtype to bound function G.neighbors(nodeid) == g.out_edges(nodeid)[1]
+# NB: KWU: No changes need to be made for G.nodes() and G.edges()
 class EdgeMinibatchIterator(object):
     
     """ This minibatch iterator iterates over batches of sampled edges or
@@ -23,6 +47,15 @@ class EdgeMinibatchIterator(object):
             placeholders, context_pairs=None, batch_size=100, max_degree=25,
             n2v_retrain=False, fixed_n2v=False,
             **kwargs):
+
+        assert "neighbors" in G.__dict__, "G.neighbors not defined"
+
+        # if not isinstance(G, (nx.MultiGraph, nx.Graph, nx.DiGraph, nx.MultiDiGraph)):
+        #     def neighbors(self, nodeid):
+        #        return self.out_edges(nodeid)[1]
+        #     import types
+        #     G.neighbors = types.MethodType(neighbors, G)
+
 
         self.G = G
         self.nodes = G.nodes()
@@ -49,24 +82,24 @@ class EdgeMinibatchIterator(object):
             else:
                 self.train_edges = self.val_edges = self.edges
 
-        print(len([n for n in G.nodes() if not G.node[n]['test'] and not G.node[n]['val']]), 'train nodes')
-        print(len([n for n in G.nodes() if G.node[n]['test'] or G.node[n]['val']]), 'test nodes')
+        print(len([n for n in G.nodes() if not get_node_data(G,n,'test') and not get_node_data(G,n,'val')]), 'train nodes')
+        print(len([n for n in G.nodes() if get_node_data(G,n,'test') or get_node_data(G,n,'val')]), 'test nodes')
         self.val_set_size = len(self.val_edges)
 
     def _n2v_prune(self, edges):
-        is_val = lambda n : self.G.node[n]["val"] or self.G.node[n]["test"]
+        is_val = lambda n : get_node_data(self.G,n,"val") or get_node_data(self.G,n,"test")
         return [e for e in edges if not is_val(e[1])]
 
     def _remove_isolated(self, edge_list):
         new_edge_list = []
         missing = 0
         for n1, n2 in edge_list:
-            if not n1 in self.G.node or not n2 in self.G.node:
+            if not is_node_in(self.G,n1) or not is_node_in(self.G,n2):
                 missing += 1
                 continue
             if (self.deg[self.id2idx[n1]] == 0 or self.deg[self.id2idx[n2]] == 0) \
-                    and (not self.G.node[n1]['test'] or self.G.node[n1]['val']) \
-                    and (not self.G.node[n2]['test'] or self.G.node[n2]['val']):
+                    and (not get_node_data(self.G,n1,'test') or get_node_data(self.G,n1,'val')) \
+                    and (not get_node_data(self.G,n2,'test') or get_node_data(self.G,n2,'val')):
                 continue
             else:
                 new_edge_list.append((n1,n2))
@@ -78,11 +111,11 @@ class EdgeMinibatchIterator(object):
         deg = np.zeros((len(self.id2idx),))
 
         for nodeid in self.G.nodes():
-            if self.G.node[nodeid]['test'] or self.G.node[nodeid]['val']:
+            if get_node_data(self.G,nodeid,'test') or get_node_data(self.G,nodeid,'val'):
                 continue
             neighbors = np.array([self.id2idx[neighbor] 
                 for neighbor in self.G.neighbors(nodeid)
-                if (not self.G[nodeid][neighbor]['train_removed'])])
+                if (not get_edge_data(self.G,nodeid,neighbor,'train_removed'))])
             deg[self.id2idx[nodeid]] = len(neighbors)
             if len(neighbors) == 0:
                 continue
@@ -160,8 +193,8 @@ class EdgeMinibatchIterator(object):
         train_edges = []
         val_edges = []
         for n1, n2 in self.G.edges():
-            if (self.G.node[n1]['val'] or self.G.node[n1]['test'] 
-                    or self.G.node[n2]['val'] or self.G.node[n2]['test']):
+            if (get_node_data(self.G,n1,'val') or get_node_data(self.G,n1,'test') 
+                    or get_node_data(self.G,n2,'val') or get_node_data(self.G,n2,'test')):
                 val_edges.append((n1,n2))
             else:
                 train_edges.append((n1,n2))
@@ -193,6 +226,14 @@ class NodeMinibatchIterator(object):
             batch_size=100, max_degree=25,
             **kwargs):
 
+        assert "neighbors" in G.__dict__, "G.neighbors not defined"
+
+        # if not isinstance(G, (nx.MultiGraph, nx.Graph, nx.DiGraph, nx.MultiDiGraph)):
+        #     def neighbors(self, nodeid):
+        #        return self.out_edges(nodeid)[1]
+        #     import types
+        #     G.neighbors = types.MethodType(neighbors, G)
+
         self.G = G
         self.nodes = G.nodes()
         self.id2idx = id2idx
@@ -206,8 +247,8 @@ class NodeMinibatchIterator(object):
         self.adj, self.deg = self.construct_adj()
         self.test_adj = self.construct_test_adj()
 
-        self.val_nodes = [n for n in self.G.nodes() if self.G.node[n]['val']]
-        self.test_nodes = [n for n in self.G.nodes() if self.G.node[n]['test']]
+        self.val_nodes = [n for n in self.G.nodes() if get_node_data(self.G,n,'val')]
+        self.test_nodes = [n for n in self.G.nodes() if get_node_data(self.G,n,'test')]
 
         self.no_train_nodes_set = set(self.val_nodes + self.test_nodes)
         self.train_nodes = set(G.nodes()).difference(self.no_train_nodes_set)
@@ -229,11 +270,11 @@ class NodeMinibatchIterator(object):
         deg = np.zeros((len(self.id2idx),))
 
         for nodeid in self.G.nodes():
-            if self.G.node[nodeid]['test'] or self.G.node[nodeid]['val']:
+            if get_node_data(self.G,nodeid,'test') or get_node_data(self.G,nodeid,'val'):
                 continue
             neighbors = np.array([self.id2idx[neighbor] 
                 for neighbor in self.G.neighbors(nodeid)
-                if (not self.G[nodeid][neighbor]['train_removed'])])
+                if (not get_edge_data(self.G,nodeid,neighbor,'train_removed'))])
             deg[self.id2idx[nodeid]] = len(neighbors)
             if len(neighbors) == 0:
                 continue

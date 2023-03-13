@@ -16,6 +16,9 @@ assert (major <= 1) and (minor <= 11), "networkx major version > 1.11"
 WALK_LEN=5
 N_WALKS=50
 
+# NB: KWU: networkx API is actually G.nodes[n]['val'] instead of G.node[n]['val']. Maybe an update happens since networkx 1.1 which is the dependency of this repo.
+# TODO: KWU: integrate graphiler_datasets.py into this repository as well
+
 def load_data(prefix, normalize=True, load_walks=False):
     G_data = json.load(open(prefix + "-G.json"))
     G = json_graph.node_link_graph(G_data)
@@ -74,10 +77,28 @@ def load_data(prefix, normalize=True, load_walks=False):
 
     return G, feats, id_map, walks, class_map
 
+import networkx as nx
+def get_node_data(G, nodeid, attr_name):
+    # if it is nx.MultiGraph(), nx.Graph(), nx.DiGraph(), or nx.MultiDiGraph()
+    if isinstance(G, (nx.MultiGraph, nx.Graph, nx.DiGraph, nx.MultiDiGraph)):
+        return G[nodeid][attr_name]
+    else:
+        # this is for dgl graph
+        return G.nodes[nodeid].data[attr_name]
+
+def get_graph_degree(G, nodeid):
+    if isinstance(G, (nx.MultiGraph, nx.Graph, nx.DiGraph, nx.MultiDiGraph)):
+        return G.degree(nodeid)
+    else:
+        #TODO: KWU: check if nx degree counts both in_degree and out_degree
+        return G.in_degree(nodeid) + G.out_degree(nodeid)
+
+# NB: KWU: incorporate support to dgl graphs as well
 def run_random_walks(G, nodes, num_walks=N_WALKS):
+    assert "neighbors" in G.__dict__, "Graph must have neighbors function"
     pairs = []
     for count, node in enumerate(nodes):
-        if G.degree(node) == 0:
+        if get_graph_degree(G,node) == 0:
             continue
         for i in range(num_walks):
             curr_node = node
@@ -97,7 +118,7 @@ if __name__ == "__main__":
     out_file = sys.argv[2]
     G_data = json.load(open(graph_file))
     G = json_graph.node_link_graph(G_data)
-    nodes = [n for n in G.nodes() if not G.node[n]["val"] and not G.node[n]["test"]]
+    nodes = [n for n in G.nodes() if not get_node_data(G,n,"val") and not get_node_data(G,n,"test")]
     G = G.subgraph(nodes)
     pairs = run_random_walks(G, nodes)
     with open(out_file, "w") as fp:
